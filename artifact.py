@@ -1,5 +1,6 @@
+from audioop import avg
 from data import P_MAIN, P_MINOR
-from utils import convolve, convolve_avg, mix, dot
+from utils import convolve, convolve_avg, mix, to_cdf, from_cdf
 from itertools import permutations
 import numpy as np
 
@@ -54,7 +55,7 @@ def single_artifact_distr(main, weight, accept):
                 p_perm_4[perm_key] = p
         else:
             result['pdf'][0] += p
-    # 分别计算初始3、4词条时的得分分布与各副词条分布
+    # 权重改变时必须清空cache
     if weight != cache['weight']:
         cache['weight'] = weight
         cache['d4'] = {}
@@ -62,6 +63,7 @@ def single_artifact_distr(main, weight, accept):
         cache['d1'] = {}
 
     def get_d4(perm):
+        '''这个函数计算初始4词条得分分布，及每个词条的条件期望'''
         if perm in cache['d4']:
             return cache['d4'][perm]
         result = {
@@ -70,6 +72,7 @@ def single_artifact_distr(main, weight, accept):
         }
         for m in perm:
             result['minor_avg'][m] = np.zeros(41)
+        # 枚举4词条的词条数，共4^4=256种
         for i in range(7, 11):
             s1 = weight[perm[0]] * i
             for j in range(7, 11):
@@ -83,6 +86,7 @@ def single_artifact_distr(main, weight, accept):
                         result['minor_avg'][perm[1]][s4] += j
                         result['minor_avg'][perm[2]][s4] += k
                         result['minor_avg'][perm[3]][s4] += l
+        # 归一化
         for i in range(41):
             if result['pdf'][i]:
                 for m in perm:
@@ -97,6 +101,7 @@ def single_artifact_distr(main, weight, accept):
         return result
 
     def get_d2(perm):
+        '''这个函数计算升2级的得分分布，及每个词条的条件期望'''
         if perm in cache['d2']:
             return cache['d2'][perm]
         result = {
@@ -105,6 +110,7 @@ def single_artifact_distr(main, weight, accept):
         }
         for m in perm:
             result['minor_avg'][m] = np.zeros(21)
+        # 枚举2个被升级的词条以及对应的升级量，共4^4=256种
         for i in range(4):
             for j in range(4):
                 for k in range(7, 11):
@@ -114,6 +120,7 @@ def single_artifact_distr(main, weight, accept):
                         result['pdf'][s2] += 1
                         result['minor_avg'][perm[i]][s2] += k
                         result['minor_avg'][perm[j]][s2] += l
+        # 归一化
         for i in range(21):
             if result['pdf'][i]:
                 for m in perm:
@@ -128,6 +135,7 @@ def single_artifact_distr(main, weight, accept):
         return result
 
     def get_d1(perm):
+        '''这个函数计算升1级的得分分布，及每个词条的条件期望'''
         if perm in cache['d1']:
             return cache['d1'][perm]
         result = {
@@ -136,11 +144,13 @@ def single_artifact_distr(main, weight, accept):
         }
         for m in perm:
             result['minor_avg'][m] = np.zeros(11)
+        # 枚举被升级的词条以及对应的升级量，共4^2=16种
         for i in range(4):
             for j in range(7, 11):
                 s1 = round(weight[perm[i]] * j)
                 result['pdf'][s1] += 1
                 result['minor_avg'][perm[i]][s1] += j
+        # 归一化
         for i in range(11):
             if result['pdf'][i]:
                 for m in perm:
@@ -154,36 +164,83 @@ def single_artifact_distr(main, weight, accept):
         cache['d1'][perm] = result
         return result
 
+    # 分别计算初始3、4词条时的得分分布与各副词条分布
     for perm in p_perm_3:
+        p = p_perm_3[perm] * 0.8
         d4 = get_d4(perm)
         d2 = get_d2(perm)
         score_pdf_of_perm = convolve(d4['pdf'], d2['pdf'], d2['pdf'])
-        result['pdf'] = mix(result['pdf'], p_perm_3[perm]
-                            * np.array(score_pdf_of_perm))
+        result['pdf'] = mix(result['pdf'], p * np.array(score_pdf_of_perm))
         for m in perm:
+            # avg_of_m := E[value of m | perm, score] * Pr[score | perm]
             avg_of_m = convolve_avg([d4['pdf'], d2['pdf'], d2['pdf']], [
                                     d4['minor_avg'][m], d2['minor_avg'][m], d2['minor_avg'][m]])
-            avg_of_m = p_perm_3[perm] * dot(avg_of_m, score_pdf_of_perm)
-            result['minor_avg'][m] = mix(result['minor_avg'][m], avg_of_m)
+            result['minor_avg'][m] = mix(
+                result['minor_avg'][m], p * np.array(avg_of_m))
 
     for perm in p_perm_4:
+        p = p_perm_4[perm] * 0.2
         d4 = get_d4(perm)
         d2 = get_d2(perm)
         d1 = get_d1(perm)
         score_pdf_of_perm = convolve(
             d4['pdf'], d2['pdf'], d2['pdf'], d1['pdf'])
-        result['pdf'] = mix(result['pdf'], p_perm_4[perm]
-                            * np.array(score_pdf_of_perm))
+        result['pdf'] = mix(result['pdf'], p * np.array(score_pdf_of_perm))
         for m in perm:
+            # avg_of_m := E[value of m | perm, score] * Pr[score | perm]
             avg_of_m = convolve_avg([d4['pdf'], d2['pdf'], d2['pdf'], d1['pdf']], [
                                     d4['minor_avg'][m], d2['minor_avg'][m], d2['minor_avg'][m], d1['minor_avg'][m]])
-            avg_of_m = p_perm_4[perm] * dot(avg_of_m, score_pdf_of_perm)
-            result['minor_avg'][m] = mix(result['minor_avg'][m], avg_of_m)
+            result['minor_avg'][m] = mix(
+                result['minor_avg'][m], p * np.array(avg_of_m))
 
+    # 归一化，因为 E[value of m | score] = \sum_{perm} E[value of m | perm, score] * Pr[score | perm] / Pr[score]
     for i in range(len(result['pdf'])):
         if result['pdf'][i] > 0:
             for m in P_MINOR:
                 if len(result['minor_avg'][m]) > i:
                     result['minor_avg'][m][i] /= result['pdf'][i]
 
+    return result
+
+
+def arifact_tuple_distr(mains, weight, accept, count):
+    result = {
+        'pdf': [0],
+        'minor_avg': {
+            'hp': [],
+            'atk': [],
+            'def': [],
+            'hpp': [],
+            'atkp': [],
+            'defp': [],
+            'em': [],
+            'er': [],
+            'cr': [],
+            'cd': [],
+        }
+    }
+    # 计算5个部位的单圣遗物分布数据
+    single_results = {}
+    for slot in mains:
+        single_results[slot] = single_artifact_distr(
+            mains[slot], weight, lambda minors, minors_4: accept(slot, minors, minors_4))
+        # 更新刷了count件后5个部位圣遗物得分分布
+        p = P_MAIN[slot][mains[slot]]
+        cdf = to_cdf(single_results[slot]['pdf'])
+        cdf = list(map(lambda x: (p*x+1-p)**count, cdf))
+        single_results[slot]['pdf'] = from_cdf(cdf)
+    # 以下假设5个部位独立，这一假设会带来少量误差
+    result['pdf'] = convolve(*[single_results[slot]['pdf']
+                             for slot in single_results])
+    for m in P_MINOR:
+        avg_of_m = convolve_avg([single_results[slot]['pdf']
+                                 for slot in single_results],
+                                [single_results[slot]['minor_avg'][m]
+                                 for slot in single_results])
+        # 归一化
+        for i in range(len(avg_of_m)):
+            if result['pdf'][i] > 0:
+                avg_of_m[i] /= result['pdf'][i]
+        # 存储计算结果
+        result['minor_avg'][m] = avg_of_m
     return result

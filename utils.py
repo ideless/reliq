@@ -25,6 +25,9 @@ def dot(*args):
 def convolve(*args):
     ret = [1]
     for a in args:
+        # 空随机变量无论和什么随机变量相加还是空随机变量
+        if len(a) == 0:
+            return []
         ret = sig.convolve(ret, a)
     return ret
 
@@ -37,10 +40,28 @@ def convolve_avg(pdfs, avgs):
         tmp = [1]
         for j in range(len(pdfs)):
             if i == j:
-                tmp = sig.convolve(tmp, dot(pdfs[j], avgs[j]))
+                tmp = convolve(tmp, dot(pdfs[j], avgs[j]))
             else:
-                tmp = sig.convolve(tmp, pdfs[j])
+                tmp = convolve(tmp, pdfs[j])
         ret = mix(ret, tmp)
+    return ret
+
+
+def to_cdf(pdf):
+    s = 0
+    ret = []
+    for i in range(len(pdf)):
+        s += pdf[i]
+        ret.append(s)
+    return ret
+
+
+def from_cdf(cdf):
+    last = 0
+    ret = []
+    for i in range(len(cdf)):
+        ret.append(cdf[i] - last)
+        last = cdf[i]
     return ret
 
 
